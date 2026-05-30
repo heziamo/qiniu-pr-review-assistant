@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """从环境变量 / .env 加载配置。"""
+    """从环境变量 / .env 加载配置。
+
+    LLM 相关的密钥（DEEPSEEK_API_KEY / ANTHROPIC_API_KEY / MODEL_PROVIDER）
+    由 app.llm_client.get_llm_client() 直接读取环境变量，不在此重复声明，
+    这样 LLM 配置与 GitHub 配置解耦。
+    """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
     github_token: str = Field(..., alias="GITHUB_TOKEN")
-    anthropic_model: str = Field("claude-opus-4-8", alias="ANTHROPIC_MODEL")
 
 
 class ReviewRequest(BaseModel):
@@ -33,7 +38,7 @@ class FileDiff(BaseModel):
     status: str = Field(description="added / modified / removed / renamed")
     additions: int = 0
     deletions: int = 0
-    patch: str | None = Field(None, description="unified diff 文本，二进制文件为空")
+    patch: Optional[str] = Field(None, description="unified diff 文本，二进制文件为空")
 
 
 class PullRequestDiff(BaseModel):
@@ -50,16 +55,11 @@ class PullRequestDiff(BaseModel):
 
 
 class ReviewResult(BaseModel):
-    """Claude 审查结果。"""
+    """LLM 审查结果。"""
 
     repo: str
     pr_number: int
     summary: str = Field(description="审查总览（Markdown）")
-    model: str
-    cache_read_tokens: int = Field(
-        0, description="本次请求命中缓存的输入 token 数，用于验证 prompt caching 生效"
-    )
-    cache_creation_tokens: int = Field(0, description="本次请求写入缓存的输入 token 数")
-    input_tokens: int = 0
-    output_tokens: int = 0
-    comment_url: str | None = Field(None, description="若发布了评论，则为评论链接")
+    provider: str = Field(description="使用的 LLM 厂商，如 deepseek / claude")
+    model: str = Field(description="使用的模型名")
+    comment_url: Optional[str] = Field(None, description="若发布了评论，则为评论链接")

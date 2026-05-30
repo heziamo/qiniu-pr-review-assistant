@@ -1,21 +1,22 @@
-"""审查核心：调用 Claude 对 PR diff 进行代码审查。
+"""审查核心：调用 LLM 对 PR diff 进行代码审查。
 
-Prompt caching 策略（见 Anthropic prompt-caching 最佳实践）：
-- 缓存是「前缀匹配」：前缀任意一个字节变化都会让其后的缓存失效。
-- 渲染顺序为 system -> messages，因此把【稳定不变】的审查规范放在 system 并打上
-  cache_control 断点；把【每次都变】的 PR diff 放在 user message（断点之后）。
-- 这样跨多次 PR 审查请求，庞大的审查规范前缀可被复用，节省约 90% 的输入成本。
-- 通过 response.usage.cache_read_input_tokens 验证缓存是否命中。
+通过 app.llm_client.get_llm_client() 获取统一的 LLM 客户端（默认 DeepSeek，
+可切换 Claude），本模块不直接依赖任何具体厂商 SDK。
+
+Prompt caching：审查规范（REVIEW_SYSTEM_PROMPT）作为稳定的 system 前缀传入，
+各客户端内部据此启用各自的缓存（Claude 显式打 cache_control 断点；DeepSeek
+为服务端自动上下文缓存），跨多次 PR 审查复用，降低成本。
+注意：切勿在 system 前缀里插入时间戳 / 随机 ID 等每请求变化的内容。
 """
 
 from __future__ import annotations
 
-import anthropic
+from typing import Optional
 
+from .llm_client import BaseLLMClient, get_llm_client
 from .models import PullRequestDiff, ReviewResult
 
-# —— 稳定前缀：审查规范。内容固定 => 可被 prompt cache 复用 ——
-# 注意：切勿在此插入时间戳 / 随机 ID / 每请求变化的内容，否则缓存前缀失效。
+# —— 稳定前缀：审查规范。内容固定 => 可被各厂商的 prompt cache 复用 ——
 REVIEW_SYSTEM_PROMPT = """\
 你是一位资深的代码审查工程师，正在审查一个 GitHub Pull Request 的 diff。
 请用中文输出一份结构化的审查报告（Markdown 格式），覆盖以下维度：
@@ -61,47 +62,26 @@ def _render_diff(pr: PullRequestDiff) -> str:
 
 
 class PRReviewer:
-    """使用 Claude 审查 PR diff。"""
+    """使用 LLM 审查 PR diff。"""
 
-    def __init__(self, api_key: str, model: str = "claude-opus-4-8") -> None:
-        self._client = anthropic.Anthropic(api_key=api_key)
-        self._model = model
+    def __init__(self, client: Optional[BaseLLMClient] = None) -> None:
+        # 默认按 .env 的 MODEL_PROVIDER 选择客户端；也可注入自定义实现（便于测试）
+        self._client = client or get_llm_client()
 
     def review(self, pr: PullRequestDiff, max_tokens: int = 8000) -> ReviewResult:
-        """对一个 PR diff 执行审查，返回结构化结果。
-
-        使用流式请求 + 自适应思考；system 前缀打 cache_control 断点以启用 prompt caching。
-        """
+        """对一个 PR diff 执行审查，返回结构化结果。"""
         diff_text = _render_diff(pr)
 
-        with self._client.messages.stream(
-            model=self._model,
-            max_tokens=max_tokens,
-            thinking={"type": "adaptive"},
-            # 稳定的审查规范放 system 并缓存；易变的 diff 放 user message。
-            system=[
-                {
-                    "type": "text",
-                    "text": REVIEW_SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{"role": "user", "content": diff_text}],
-        ) as stream:
-            message = stream.get_final_message()
-
-        summary = "".join(
-            block.text for block in message.content if block.type == "text"
-        )
-        usage = message.usage
+        messages = [
+            {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
+            {"role": "user", "content": diff_text},
+        ]
+        summary = self._client.chat(messages, max_tokens=max_tokens)
 
         return ReviewResult(
             repo=pr.repo,
             pr_number=pr.pr_number,
             summary=summary,
-            model=self._model,
-            cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
-            cache_creation_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
+            provider=self._client.provider,
+            model=self._client.model,
         )

@@ -26,8 +26,9 @@ def get_github(settings: Settings = Depends(get_settings)) -> GitHubClient:
     return GitHubClient(settings.github_token)
 
 
-def get_reviewer(settings: Settings = Depends(get_settings)) -> PRReviewer:
-    return PRReviewer(settings.anthropic_api_key, settings.anthropic_model)
+def get_reviewer() -> PRReviewer:
+    # LLM 客户端由 get_llm_client() 按 MODEL_PROVIDER 自行选择（DeepSeek / Claude）
+    return PRReviewer()
 
 
 @app.get("/health")
