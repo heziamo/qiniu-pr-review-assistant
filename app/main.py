@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -16,6 +19,12 @@ from .reviewer import PRReviewer
 
 load_dotenv()
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("pr_review")
+
 app = FastAPI(
     title="AI PR Review 助手",
     description="七牛云 × XEngineer 暑期实训营 题目三：GitHub PR 自动审查（DeepSeek / Claude）",
@@ -24,6 +33,22 @@ app = FastAPI(
 
 # 前端模板路径
 _INDEX_HTML = Path(__file__).resolve().parent / "templates" / "index.html"
+
+# 大 PR 保护阈值
+MAX_FILES = 50
+MAX_CHANGED_LINES = 20000
+
+# 内存监控指标（简单版，进程重启即清零）
+_metrics_lock = threading.Lock()
+_metrics: dict = {"total_reviews": 0, "total_elapsed": 0.0, "provider_counts": {}}
+
+
+def _record_metrics(provider: str, elapsed: float) -> None:
+    with _metrics_lock:
+        _metrics["total_reviews"] += 1
+        _metrics["total_elapsed"] += elapsed
+        counts = _metrics["provider_counts"]
+        counts[provider] = counts.get(provider, 0) + 1
 
 
 @lru_cache
@@ -56,7 +81,32 @@ def _run_review(
     if not pr_diff.files:
         raise HTTPException(status_code=422, detail="该 PR 没有可审查的文件变更")
 
-    result = reviewer.review(pr_diff)
+    # 大 PR 保护：文件过多或变更行数过大时拒绝，避免超时与高成本
+    total_lines = sum(f.additions + f.deletions for f in pr_diff.files)
+    if len(pr_diff.files) > MAX_FILES or total_lines > MAX_CHANGED_LINES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"PR 过大（{len(pr_diff.files)} 个文件 / {total_lines} 行变更，"
+                f"上限 {MAX_FILES} 文件 / {MAX_CHANGED_LINES} 行），请拆分后审查"
+            ),
+        )
+
+    start = time.perf_counter()
+    try:
+        result = reviewer.review(pr_diff)
+    except Exception as exc:  # noqa: BLE001 —— 模型调用失败统一转成 502
+        logger.exception("模型调用失败 repo=%s pr=%s", repo, pr_number)
+        raise HTTPException(status_code=502, detail=f"模型调用失败: {exc}") from exc
+    elapsed = time.perf_counter() - start
+
+    _record_metrics(result.provider, elapsed)
+    logger.info(
+        "审查完成 repo=%s pr=#%s 耗时=%.1fs 模型=%s/%s tokens=%d+%d 风险=%d 评分=%d",
+        repo, pr_number, elapsed, result.provider, result.model,
+        result.input_tokens, result.output_tokens, len(result.risks),
+        result.overall_score,
+    )
 
     if post_comment:
         try:
@@ -84,6 +134,19 @@ def health() -> dict[str, str]:
 def config() -> dict[str, str]:
     """供前端展示当前使用的 LLM 厂商（不含任何密钥）。"""
     return {"provider": os.getenv("MODEL_PROVIDER", "deepseek")}
+
+
+@app.get("/metrics")
+def metrics() -> dict:
+    """简单的内存监控指标：累计审查次数、平均耗时、各厂商调用次数。"""
+    with _metrics_lock:
+        n = _metrics["total_reviews"]
+        avg = _metrics["total_elapsed"] / n if n else 0.0
+        return {
+            "total_reviews": n,
+            "avg_elapsed_seconds": round(avg, 2),
+            "provider_counts": dict(_metrics["provider_counts"]),
+        }
 
 
 @app.post("/review", response_model=ReviewResult)

@@ -82,6 +82,8 @@ class _ParsedReview:
     summary: str = ""
     risks: list = field(default_factory=list)
     overall_score: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def _patch_line_count(patch: Optional[str]) -> int:
@@ -224,10 +226,13 @@ class PRReviewer:
         all_risks: list[Risk] = []
         summaries: list[str] = []
         scores: list[int] = []
+        total_in = total_out = 0
         for (label, _), p in zip(chunks, parsed):
             all_risks.extend(p.risks)
             summaries.append(f"【{label}】{p.summary}" if multi else p.summary)
             scores.append(p.overall_score)
+            total_in += p.input_tokens
+            total_out += p.output_tokens
 
         # 按 severity 由高到低排序
         all_risks.sort(key=lambda r: _SEVERITY_ORDER.get(r.severity, 99))
@@ -240,6 +245,8 @@ class PRReviewer:
             overall_score=min(scores) if scores else 0,  # 最差分块主导总分
             provider=self._client.provider,
             model=self._client.model,
+            input_tokens=total_in,
+            output_tokens=total_out,
         )
 
     def _review_chunk(self, diff_text: str, max_tokens: int) -> _ParsedReview:
@@ -248,4 +255,8 @@ class PRReviewer:
             {"role": "user", "content": diff_text},
         ]
         raw = self._client.chat(messages, json_mode=True, max_tokens=max_tokens)
-        return _parse_review(raw)
+        parsed = _parse_review(raw)
+        # 记录本次分块的 token 用量（来自客户端最近一次调用）
+        parsed.input_tokens = self._client.last_usage.get("input_tokens", 0)
+        parsed.output_tokens = self._client.last_usage.get("output_tokens", 0)
+        return parsed

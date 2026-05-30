@@ -119,6 +119,8 @@ class ReviewResult(BaseModel):
     overall_score: int = Field(0, description="代码质量总分 0-100，越高越好")
     provider: str = Field("", description="使用的 LLM 厂商，如 deepseek / claude")
     model: str = Field("", description="使用的模型名")
+    input_tokens: int = Field(0, description="本次审查累计输入 token")
+    output_tokens: int = Field(0, description="本次审查累计输出 token")
     comment_url: Optional[str] = Field(None, description="若发布了评论，则为评论链接")
 
     @field_validator("overall_score", mode="before")

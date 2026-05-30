@@ -5,6 +5,7 @@ PyGithub>=2.5.0
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
 python-dotenv>=1.0.0
+tenacity>=8.0.0
 
 # 可选：仅当 MODEL_PROVIDER=claude 时才需要
 anthropic>=0.49.0

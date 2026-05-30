@@ -9,14 +9,50 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from abc import ABC, abstractmethod
 from typing import Optional
 
 from dotenv import load_dotenv
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+logger = logging.getLogger(__name__)
 
 # OpenAI 风格的消息类型别名
 Message = dict[str, str]
+
+
+def _is_retryable_error(exc: BaseException) -> bool:
+    """仅对 429（限流）/ 5xx（服务端错误）/ 连接超时类错误重试。
+
+    openai 与 anthropic 的 APIStatusError 子类都带 .status_code；
+    连接/超时类（APIConnectionError / APITimeoutError）无 status_code，按类名识别。
+    """
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or status >= 500
+    return type(exc).__name__ in {"APIConnectionError", "APITimeoutError"}
+
+
+def _log_retry(retry_state) -> None:
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    logger.warning("LLM 调用重试 [%d/3]: %s", retry_state.attempt_number, exc)
+
+
+# 指数退避：最多 3 次，间隔 ~1s/2s/4s（上限 10s），仅对可重试错误生效
+_llm_retry = retry(
+    retry=retry_if_exception(_is_retryable_error),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    before_sleep=_log_retry,
+    reraise=True,
+)
 
 
 class BaseLLMClient(ABC):
@@ -24,12 +60,14 @@ class BaseLLMClient(ABC):
 
     子类需实现 chat()，输入 OpenAI 风格 messages，返回模型输出文本。
     属性 provider / model 用于在结果中标注本次使用的厂商与模型。
+    last_usage 记录最近一次调用的 token 用量（供上层统计）。
     """
 
     provider: str = "base"
 
     def __init__(self, model: str) -> None:
         self.model = model
+        self.last_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
     @abstractmethod
     def chat(self, messages: list[Message], **kwargs) -> str:
@@ -54,6 +92,7 @@ class DeepSeekClient(BaseLLMClient):
 
         self._client = OpenAI(api_key=api_key, base_url=base_url)
 
+    @_llm_retry
     def chat(self, messages: list[Message], **kwargs) -> str:
         # json_mode=True -> 让 DeepSeek 强制返回合法 JSON 对象
         if kwargs.pop("json_mode", False):
@@ -63,6 +102,12 @@ class DeepSeekClient(BaseLLMClient):
             messages=messages,  # type: ignore[arg-type]
             **kwargs,
         )
+        usage = getattr(resp, "usage", None)
+        if usage:
+            self.last_usage = {
+                "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
+            }
         return resp.choices[0].message.content or ""
 
 
@@ -88,6 +133,7 @@ class ClaudeClient(BaseLLMClient):
         self._client = anthropic.Anthropic(api_key=api_key)
         self._max_tokens = max_tokens
 
+    @_llm_retry
     def chat(self, messages: list[Message], **kwargs) -> str:
         # Claude 没有简单的 json_object 开关，依赖 prompt 约束输出 JSON，这里忽略该标志
         kwargs.pop("json_mode", None)
@@ -112,6 +158,12 @@ class ClaudeClient(BaseLLMClient):
         params.update(kwargs)
 
         resp = self._client.messages.create(**params)
+        usage = getattr(resp, "usage", None)
+        if usage:
+            self.last_usage = {
+                "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+                "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+            }
         return "".join(b.text for b in resp.content if b.type == "text")
 
 
