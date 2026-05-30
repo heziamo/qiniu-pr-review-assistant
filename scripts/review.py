@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -46,9 +47,18 @@ def main() -> None:
     result = PRReviewer().review(pr)
 
     print("=" * 60)
-    print(f"厂商/模型: {result.provider} / {result.model}")
+    print(f"厂商/模型 : {result.provider} / {result.model}")
+    print(f"总体评分 : {result.overall_score}/100")
+    print(f"风险点数 : {len(result.risks)}")
     print("=" * 60)
-    print(result.summary)
+
+    # 1) 结构化 JSON 输出（验证 schema）
+    print("\n----- 结构化结果 (JSON) -----")
+    print(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
+
+    # 2) Markdown 报告（即发到 PR 评论里的样子）
+    print("\n----- Markdown 报告 -----")
+    print(result.to_markdown())
 
 
 if __name__ == "__main__":

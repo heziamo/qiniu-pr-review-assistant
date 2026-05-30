@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 风险分级（由高到低）与问题类型，供 prompt 与校验共用
+SEVERITY_LEVELS = ("critical", "high", "medium", "low")
+ISSUE_TYPES = ("bug", "security", "performance", "style", "maintainability")
+
+_SEVERITY_ORDER = {s: i for i, s in enumerate(SEVERITY_LEVELS)}
+_SEVERITY_EMOJI = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}
 
 
 class Settings(BaseSettings):
@@ -54,12 +62,83 @@ class PullRequestDiff(BaseModel):
     files: list[FileDiff] = Field(default_factory=list)
 
 
+class Risk(BaseModel):
+    """单条审查发现的风险点。"""
+
+    file: str = Field("", description="问题所在文件路径")
+    line: Optional[int] = Field(None, description="起始行号；无法定位为 null")
+    severity: str = Field("low", description=" / ".join(SEVERITY_LEVELS))
+    type: str = Field("maintainability", description=" / ".join(ISSUE_TYPES))
+    description: str = Field("", description="问题描述")
+    suggestion: str = Field("", description="可执行的修改建议")
+
+    @field_validator("line", mode="before")
+    @classmethod
+    def _coerce_line(cls, v: object) -> Optional[int]:
+        if v is None or v == "":
+            return None
+        if isinstance(v, bool):  # 避免 True/False 被当成 1/0
+            return None
+        if isinstance(v, int):
+            return v
+        # 字符串如 "52" / "52-56" / "L52" -> 取第一个整数
+        m = re.search(r"\d+", str(v))
+        return int(m.group()) if m else None
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _norm_severity(cls, v: object) -> str:
+        s = str(v).strip().lower()
+        return s if s in SEVERITY_LEVELS else "low"
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _norm_type(cls, v: object) -> str:
+        t = str(v).strip().lower()
+        return t if t in ISSUE_TYPES else "maintainability"
+
+
 class ReviewResult(BaseModel):
-    """LLM 审查结果。"""
+    """LLM 审查结果（结构化）。"""
 
     repo: str
     pr_number: int
-    summary: str = Field(description="审查总览（Markdown）")
-    provider: str = Field(description="使用的 LLM 厂商，如 deepseek / claude")
-    model: str = Field(description="使用的模型名")
+    summary: str = Field("", description="总体评价")
+    risks: list[Risk] = Field(default_factory=list, description="风险点列表，按严重程度排序")
+    overall_score: int = Field(0, description="代码质量总分 0-100，越高越好")
+    provider: str = Field("", description="使用的 LLM 厂商，如 deepseek / claude")
+    model: str = Field("", description="使用的模型名")
     comment_url: Optional[str] = Field(None, description="若发布了评论，则为评论链接")
+
+    @field_validator("overall_score", mode="before")
+    @classmethod
+    def _clamp_score(cls, v: object) -> int:
+        try:
+            n = int(round(float(v)))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(100, n))
+
+    def to_markdown(self) -> str:
+        """渲染成适合发到 PR 评论的 Markdown 报告。"""
+        lines = [
+            "## 🤖 AI 代码审查报告",
+            "",
+            f"**总体评分**: {self.overall_score}/100　**模型**: {self.provider}/{self.model}",
+            "",
+            self.summary or "（无总体评价）",
+            "",
+        ]
+        if not self.risks:
+            lines.append("✅ 未发现明显问题。")
+            return "\n".join(lines)
+
+        lines.append(f"### 风险点（{len(self.risks)}）")
+        for r in self.risks:
+            emoji = _SEVERITY_EMOJI.get(r.severity, "⚪️")
+            loc = f"`{r.file}`" + (f":{r.line}" if r.line is not None else "")
+            lines.append(f"- {emoji} **{r.severity}** [{r.type}] {loc}")
+            lines.append(f"  - {r.description}")
+            if r.suggestion:
+                lines.append(f"  - 建议：{r.suggestion}")
+        return "\n".join(lines)

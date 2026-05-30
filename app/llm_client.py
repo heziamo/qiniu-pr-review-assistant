@@ -55,6 +55,9 @@ class DeepSeekClient(BaseLLMClient):
         self._client = OpenAI(api_key=api_key, base_url=base_url)
 
     def chat(self, messages: list[Message], **kwargs) -> str:
+        # json_mode=True -> 让 DeepSeek 强制返回合法 JSON 对象
+        if kwargs.pop("json_mode", False):
+            kwargs.setdefault("response_format", {"type": "json_object"})
         resp = self._client.chat.completions.create(
             model=self.model,
             messages=messages,  # type: ignore[arg-type]
@@ -86,6 +89,8 @@ class ClaudeClient(BaseLLMClient):
         self._max_tokens = max_tokens
 
     def chat(self, messages: list[Message], **kwargs) -> str:
+        # Claude 没有简单的 json_object 开关，依赖 prompt 约束输出 JSON，这里忽略该标志
+        kwargs.pop("json_mode", None)
         # 拆出 system 与对话消息（Claude 的 system 是独立参数）
         system_parts = [m["content"] for m in messages if m["role"] == "system"]
         convo = [m for m in messages if m["role"] != "system"]

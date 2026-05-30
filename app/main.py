@@ -56,7 +56,7 @@ def review_pr(
     if req.post_comment:
         try:
             result.comment_url = github.post_review_comment(
-                req.repo, req.pr_number, result.summary
+                req.repo, req.pr_number, result.to_markdown()
             )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
