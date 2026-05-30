@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from .github_client import GitHubClient, parse_pr_url
 from .models import ReviewRequest, ReviewResult, ReviewUrlRequest, Settings
 from .reviewer import PRReviewer
+
+load_dotenv()
 
 app = FastAPI(
     title="AI PR Review 助手",
@@ -74,6 +78,12 @@ def index() -> HTMLResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/config")
+def config() -> dict[str, str]:
+    """供前端展示当前使用的 LLM 厂商（不含任何密钥）。"""
+    return {"provider": os.getenv("MODEL_PROVIDER", "deepseek")}
 
 
 @app.post("/review", response_model=ReviewResult)

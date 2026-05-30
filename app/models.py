@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 风险分级（由高到低）与问题类型，供 prompt 与校验共用
@@ -129,6 +129,12 @@ class ReviewResult(BaseModel):
         except (TypeError, ValueError):
             return 0
         return max(0, min(100, n))
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def markdown(self) -> str:
+        """Markdown 报告，随响应一并返回，供前端「复制报告」使用。"""
+        return self.to_markdown()
 
     def to_markdown(self) -> str:
         """渲染成适合发到 PR 评论的 Markdown 报告。"""
