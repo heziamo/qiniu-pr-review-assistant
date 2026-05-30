@@ -39,6 +39,17 @@ class ReviewRequest(BaseModel):
     )
 
 
+class ReviewUrlRequest(BaseModel):
+    """Web 前端用：直接提交 PR URL（内部解析出 repo + pr_number）。"""
+
+    pr_url: str = Field(
+        ...,
+        description="完整 PR URL",
+        examples=["https://github.com/owner/repo/pull/123"],
+    )
+    post_comment: bool = Field(False, description="是否将审查结果作为评论发布回 PR")
+
+
 class FileDiff(BaseModel):
     """单个文件的 diff。"""
 
