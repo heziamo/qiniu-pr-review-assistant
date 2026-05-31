@@ -459,7 +459,8 @@
         });
         let data = {};
         try { data = await resp.json(); } catch (_) {}
-        if (!resp.ok) {
+        // 流式接口出错时以 HTTP 200 + {detail} 返回，需一并识别
+        if (!resp.ok || (data && data.detail)) {
           showError(extractError(data, resp.status));
         } else {
           setStage("✅ 审查完成");

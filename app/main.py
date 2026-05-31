@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import threading
 import time
 from functools import lru_cache
 from pathlib import Path
+from typing import Union
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from .github_client import GitHubClient, parse_pr_url
 from .models import ReviewRequest, ReviewResult, ReviewUrlRequest, Settings
@@ -65,14 +69,10 @@ def get_reviewer() -> PRReviewer:
     return PRReviewer()
 
 
-def _run_review(
-    github: GitHubClient,
-    reviewer: PRReviewer,
-    repo: str,
-    pr_number: int,
-    post_comment: bool,
-) -> ReviewResult:
-    """拉取 diff -> 审查 ->（可选）发评论，供 /review 与 /review/url 复用。"""
+def _fetch_and_guard(
+    github: GitHubClient, repo: str, pr_number: int
+):
+    """拉取 PR diff 并做空变更 / 大 PR 保护检查，失败抛 HTTPException。"""
     try:
         pr_diff = github.fetch_pr_diff(repo, pr_number)
     except Exception as exc:  # noqa: BLE001 —— 统一转成 HTTP 错误
@@ -91,15 +91,14 @@ def _run_review(
                 f"上限 {MAX_FILES} 文件 / {MAX_CHANGED_LINES} 行），请拆分后审查"
             ),
         )
+    return pr_diff
 
+
+def _review_and_record(reviewer: PRReviewer, pr_diff, repo: str, pr_number: int) -> ReviewResult:
+    """执行审查并记录指标与日志（不含发评论）。"""
     start = time.perf_counter()
-    try:
-        result = reviewer.review(pr_diff)
-    except Exception as exc:  # noqa: BLE001 —— 模型调用失败统一转成 502
-        logger.exception("模型调用失败 repo=%s pr=%s", repo, pr_number)
-        raise HTTPException(status_code=502, detail=f"模型调用失败: {exc}") from exc
+    result = reviewer.review(pr_diff)
     elapsed = time.perf_counter() - start
-
     _record_metrics(result.provider, elapsed)
     logger.info(
         "审查完成 repo=%s pr=#%s 耗时=%.1fs 模型=%s/%s tokens=%d+%d 风险=%d 评分=%d",
@@ -107,6 +106,23 @@ def _run_review(
         result.input_tokens, result.output_tokens, len(result.risks),
         result.overall_score,
     )
+    return result
+
+
+def _run_review(
+    github: GitHubClient,
+    reviewer: PRReviewer,
+    repo: str,
+    pr_number: int,
+    post_comment: bool,
+) -> ReviewResult:
+    """同步版：拉取 diff -> 审查 ->（可选）发评论，供 /review 使用。"""
+    pr_diff = _fetch_and_guard(github, repo, pr_number)
+    try:
+        result = _review_and_record(reviewer, pr_diff, repo, pr_number)
+    except Exception as exc:  # noqa: BLE001 —— 模型调用失败统一转成 502
+        logger.exception("模型调用失败 repo=%s pr=%s", repo, pr_number)
+        raise HTTPException(status_code=502, detail=f"模型调用失败: {exc}") from exc
 
     if post_comment:
         try:
@@ -117,6 +133,53 @@ def _run_review(
             raise HTTPException(status_code=502, detail=f"发布评论失败: {exc}") from exc
 
     return result
+
+
+def _stream_review(
+    github: GitHubClient,
+    reviewer: PRReviewer,
+    repo: str,
+    pr_number: int,
+    post_comment: bool,
+) -> StreamingResponse:
+    """流式版（供 /review/url 使用）：审查期间每 ~3s 发送一个空白字节作为心跳，
+    避免慢请求（>5s）在某些云网络/代理下因连接空闲被重置。
+
+    返回体仍是合法 JSON——前导空白会被任何 JSON 解析器忽略（含浏览器 fetch().json()）。
+    审查/拉取出错时返回 {"detail": ...}（HTTP 200），前端据 detail 字段提示。
+    """
+
+    async def do_work() -> Union[ReviewResult, dict]:
+        pr_diff = await run_in_threadpool(_fetch_and_guard, github, repo, pr_number)
+        result = await run_in_threadpool(
+            _review_and_record, reviewer, pr_diff, repo, pr_number
+        )
+        if post_comment:
+            result.comment_url = await run_in_threadpool(
+                github.post_review_comment, repo, pr_number, result.to_markdown()
+            )
+        return result
+
+    async def gen():
+        yield b" "  # 立即发首字节，确保连接从一开始就有数据流
+        task = asyncio.create_task(do_work())
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=3.0)
+            if task in done:
+                break
+            yield b" "  # 心跳保活
+        try:
+            result = task.result()
+        except HTTPException as exc:
+            yield json.dumps({"detail": exc.detail}, ensure_ascii=False).encode()
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("审查失败 repo=%s pr=%s", repo, pr_number)
+            yield json.dumps({"detail": f"审查失败: {exc}"}, ensure_ascii=False).encode()
+            return
+        yield result.model_dump_json().encode()
+
+    return StreamingResponse(gen(), media_type="application/json")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -159,15 +222,18 @@ def review_pr(
     return _run_review(github, reviewer, req.repo, req.pr_number, req.post_comment)
 
 
-@app.post("/review/url", response_model=ReviewResult)
+@app.post("/review/url")
 def review_pr_by_url(
     req: ReviewUrlRequest,
     github: GitHubClient = Depends(get_github),
     reviewer: PRReviewer = Depends(get_reviewer),
-) -> ReviewResult:
-    """按 PR URL 审查（供前端使用，内部解析出 repo + pr_number）。"""
+) -> StreamingResponse:
+    """按 PR URL 审查（供前端使用，内部解析出 repo + pr_number）。
+
+    采用流式响应 + 心跳保活，避免慢请求在云网络下被空闲超时重置。
+    """
     try:
         repo, pr_number = parse_pr_url(req.pr_url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _run_review(github, reviewer, repo, pr_number, req.post_comment)
+    return _stream_review(github, reviewer, repo, pr_number, req.post_comment)
