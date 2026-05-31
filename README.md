@@ -109,6 +109,46 @@ uvicorn app.main:app --reload
 
 服务启动后访问 http://127.0.0.1:8000/docs 查看交互式 API 文档。
 
+## 🐳 用 Docker 部署
+
+项目已 Docker 化（多阶段构建、非 root 运行、`/health` 健康检查、镜像约 207MB）。
+
+```bash
+# 1. 准备密钥
+cp .env.example .env          # 填入 DEEPSEEK_API_KEY 与 GITHUB_TOKEN
+
+# 2. 一键构建并后台启动（仅 app）
+docker compose up -d --build
+
+# 3. 访问
+#    http://<服务器IP>:8000
+```
+
+首次构建会拉取 `python:3.11-slim` 基础镜像并安装依赖（已配清华 pip 源），约 5–15 分钟。
+
+### 可选：启用 nginx 反向代理
+
+想用 80 端口（免带 `:8000`）访问时，启用 `with-nginx` profile：
+
+```bash
+docker compose --profile with-nginx up -d --build
+# 访问 http://<服务器IP>/ （nginx 反代到 app:8000）
+```
+
+不加该 profile 时默认只起 app 服务，互不影响。反代配置见 [deploy/nginx.conf](deploy/nginx.conf)。
+
+### 常用运维命令
+
+```bash
+docker compose ps                       # 状态 / 健康
+docker compose logs -f --tail 100       # 实时日志
+docker compose restart                  # 重启
+git pull && docker compose up -d --build  # 更新代码并重建
+docker compose down                     # 停止并移除容器
+```
+
+> 镜像通过 `.dockerignore` 排除了 `.env` / `.git` / `.venv` 等，密钥仅在运行时由 `env_file` 注入，不进镜像。
+
 ## API
 
 ### `POST /review`
