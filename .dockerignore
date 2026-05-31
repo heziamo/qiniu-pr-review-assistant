@@ -1,0 +1,39 @@
+# 版本控制
+.git
+.gitignore
+.gitattributes
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+
+# 密钥（绝对不能进镜像）
+.env
+*.pem
+*.key
+
+# IDE
+.vscode
+.idea
+.claude
+*.swp
+.DS_Store
+
+# 文档（不需要进镜像）
+docs
+README.md
+LICENSE
+*.md
+
+# 部署相关
+deploy
+Dockerfile
+docker-compose.yml
+.dockerignore

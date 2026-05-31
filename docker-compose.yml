@@ -1,0 +1,24 @@
+# 一键启动 PR Review 助手
+# 用法：
+#   1. cp .env.example .env  并填入真实密钥
+#   2. docker compose up -d --build
+#   3. 访问 http://<服务器IP>:8000
+
+services:
+  pr-review:
+    build: .
+    image: qiniu-pr-review:latest
+    container_name: pr-review
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    # 资源限制：避免吃光 2GB 小内存机
+    mem_limit: 1g
+    cpus: 1.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
