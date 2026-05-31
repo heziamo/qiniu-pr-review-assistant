@@ -34,8 +34,8 @@ app = FastAPI(
 # 前端模板路径
 _INDEX_HTML = Path(__file__).resolve().parent / "templates" / "index.html"
 
-# 大 PR 保护阈值
-MAX_FILES = 50
+# 大 PR 保护阈值（行数是主要保护，文件数为辅）
+MAX_FILES = 80
 MAX_CHANGED_LINES = 20000
 
 # 内存监控指标（简单版，进程重启即清零）

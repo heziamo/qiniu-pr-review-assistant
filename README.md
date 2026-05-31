@@ -16,6 +16,18 @@ uvicorn app.main:app --reload        # 启动后浏览器打开 http://localhost
 
 > 📄 完整设计文档（系统架构 / 模型选型 / 上下文分块 / 误报漏报控制 / 性能成本）见 **[docs/DESIGN.md](docs/DESIGN.md)**。
 
+## 📸 界面截图
+
+| 审查中 | 小 PR 结果 |
+| :---: | :---: |
+| ![审查中](docs/screenshots/reviewing.png) | ![小 PR 结果](docs/screenshots/result-small.png) |
+
+| 大 PR（hunk 分块）结果 | Markdown 导出 |
+| :---: | :---: |
+| ![大 PR 分块结果](docs/screenshots/result-large.png) | ![Markdown 导出](docs/screenshots/markdown-export.png) |
+
+> 截图采集步骤（含演示用的 3 个真实 PR）见 [docs/screenshots/README.md](docs/screenshots/README.md)。
+
 ## 功能
 
 - 拉取任意 GitHub 仓库指定 PR 的元信息与文件 diff（PyGithub）
