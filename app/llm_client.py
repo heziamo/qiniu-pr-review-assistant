@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from dotenv import load_dotenv
 from tenacity import (

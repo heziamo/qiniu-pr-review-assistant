@@ -4,6 +4,8 @@ AI-powered GitHub PR review assistant —— 七牛云 × XEngineer 暑期实训
 
 基于 **FastAPI + 多模型 LLM 抽象层** 的 GitHub Pull Request 自动审查助手：拉取指定 PR 的 diff，调用 LLM（默认 DeepSeek，可选 Claude）进行多维度代码审查，输出结构化、分级、可定位的风险点，并可一键回写为 PR 评论。
 
+> 🌐 **在线 Demo**：http://117.50.181.92:8000/ （Docker 部署，直接粘贴 PR URL 即可体验）
+
 ## 🚀 快速开始
 
 ```bash
@@ -185,3 +187,14 @@ python scripts/review.py https://github.com/owner/repo/pull/123
 | `GITHUB_TOKEN` | ✅ | GitHub Personal Access Token（`repo` / `public_repo` 权限） |
 | `DEEPSEEK_MODEL` | ❌ | 覆盖默认模型，默认 `deepseek-chat` |
 | `ANTHROPIC_MODEL` | ❌ | 覆盖默认模型，默认 `claude-sonnet-4-5` |
+
+## 致谢
+
+- **七牛云 × XEngineer 暑期实训营** —— 提供题目三（AI PR Review 助手）与实践平台
+- [DeepSeek](https://www.deepseek.com/) —— 高性价比的国产大模型，本项目默认审查引擎
+- [Anthropic Claude](https://www.anthropic.com/) —— 可选的高精度审查模型
+- [FastAPI](https://fastapi.tiangolo.com/) / [PyGithub](https://github.com/PyGithub/PyGithub) / [tenacity](https://github.com/jd/tenacity) 等优秀开源项目
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
