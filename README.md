@@ -2,7 +2,19 @@
 
 AI-powered GitHub PR review assistant —— 七牛云 × XEngineer 暑期实训营 **题目三**
 
-基于 **FastAPI + 多模型 LLM 抽象层** 的 GitHub Pull Request 自动审查助手：拉取指定 PR 的 diff，调用 LLM（默认 DeepSeek，可选 Claude）进行多维度代码审查，并可将结果作为评论发布回 PR。
+基于 **FastAPI + 多模型 LLM 抽象层** 的 GitHub Pull Request 自动审查助手：拉取指定 PR 的 diff，调用 LLM（默认 DeepSeek，可选 Claude）进行多维度代码审查，输出结构化、分级、可定位的风险点，并可一键回写为 PR 评论。
+
+## 🚀 快速开始
+
+```bash
+pip install -r requirements.txt      # 安装依赖
+cp .env.example .env                 # 填入 DEEPSEEK_API_KEY 与 GITHUB_TOKEN
+uvicorn app.main:app --reload        # 启动后浏览器打开 http://localhost:8000/
+```
+
+![首页截图](docs/screenshots/home.png)
+
+> 📄 完整设计文档（系统架构 / 模型选型 / 上下文分块 / 误报漏报控制 / 性能成本）见 **[docs/DESIGN.md](docs/DESIGN.md)**。
 
 ## 功能
 
@@ -68,7 +80,7 @@ scripts/
 └── review.py         # 端到端验证：拉取 + LLM 审查
 ```
 
-## 快速开始
+## 安装与配置（详细）
 
 ```bash
 # 1. 安装依赖
